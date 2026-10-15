@@ -19,15 +19,35 @@ Module Program
             Vectors()
             Return
         End If
-        Dim license = Environment.GetEnvironmentVariable("KERN_LICENSE_KEY")
-        Dim installation = Environment.GetEnvironmentVariable("KERN_INSTALLATION_ID")
-        If String.IsNullOrEmpty(license) OrElse String.IsNullOrEmpty(installation) Then
-            Throw New Exception("Set KERN_LICENSE_KEY and KERN_INSTALLATION_ID")
-        End If
         Dim app = New KernAuth(Api, AppId, KeyId, PublicKey)
-        If Not app.Validate(license, installation).GetAwaiter().GetResult() Then Throw New Exception(app.Message)
-        Console.WriteLine(app.Message)
+        If Not app.Validate(LicenseKey(), InstallationId()).GetAwaiter().GetResult() Then Throw New Exception(app.Message)
+        Console.WriteLine($"Status: {app.Status}")
+        Console.WriteLine($"Features: {app.Features}")
+        Console.WriteLine($"License: {app.LicenseId}")
+        Console.WriteLine($"Check expires: {app.ExpiresAt}")
     End Sub
+
+    Function LicenseKey() As String
+        Dim fromEnv = Environment.GetEnvironmentVariable("KERN_LICENSE_KEY")
+        If Not String.IsNullOrWhiteSpace(fromEnv) Then Return fromEnv.Trim()
+        If Not Console.IsInputRedirected Then Console.Write("Enter license: ")
+        Dim entered = Console.ReadLine()
+        If entered Is Nothing Then Return ""
+        Return entered.Trim()
+    End Function
+
+    Function InstallationId() As String
+        Dim fromEnv = Environment.GetEnvironmentVariable("KERN_INSTALLATION_ID")
+        If Not String.IsNullOrWhiteSpace(fromEnv) Then Return fromEnv.Trim()
+        Const installFile As String = "kernauth-install"
+        If File.Exists(installFile) Then
+            Dim saved = File.ReadAllText(installFile).Trim()
+            If saved.Length > 0 Then Return saved
+        End If
+        Dim created = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant()
+        File.WriteAllText(installFile, created & vbLf)
+        Return created
+    End Function
 
     Sub Vectors()
         Dim vectorPath = Path.GetFullPath("vectors.json")
@@ -83,6 +103,10 @@ Public Class KernAuth
     Public ReadOnly Property PublicKey As String
     Public Property Success As Boolean
     Public Property Message As String = ""
+    Public Property Status As String = ""
+    Public Property Features As String = ""
+    Public Property LicenseId As String = ""
+    Public Property ExpiresAt As String = ""
 
     Public Sub New(api As String, appId As String, keyId As String, publicKey As String)
         Me.Api = api
@@ -123,6 +147,12 @@ Public Class KernAuth
                     If Not Verify(parsed.RootElement, nonce, AppId, KeyId, PublicKey, DateTimeOffset.UtcNow) Then
                         Throw New Exception("Invalid or expired signed entitlement")
                     End If
+                    Dim ent = parsed.RootElement.GetProperty("entitlement")
+                    Status = If(ent.GetProperty("status").GetString(), "")
+                    Dim feature = ent.GetProperty("features")
+                    Features = CanonicalFeatures(If(feature.ValueKind = JsonValueKind.String, JsonDocument.Parse(feature.GetString()).RootElement, feature))
+                    LicenseId = If(ent.GetProperty("license_id").GetString(), "")
+                    ExpiresAt = If(ent.GetProperty("expires_at").GetString(), "")
                 End Using
             End Using
         End Using

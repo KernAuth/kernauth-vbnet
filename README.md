@@ -1,16 +1,6 @@
 # KernAuth VB.NET example
 
-Example for .NET 8. This file calls validate and checks the Ed25519 signature with BouncyCastle.
-
-## Add it
-
-Paste the public app ID, key ID, and public key from Developers over the placeholders in `Program.vb`.
-
-```
-dotnet run -- --test-vectors
-```
-
-Run from the repository root so the test can read `vectors.json`. Run the example with `KERN_LICENSE_KEY` and `KERN_INSTALLATION_ID` set. Persist one installation ID per device.
+Paste the public app ID, key ID, and public key from Developers into `Program.vb`. .NET 8, with BouncyCastle.Cryptography.
 
 ## Instance
 
@@ -28,8 +18,21 @@ Dim app = New KernAuth(
 If Not Await app.Validate(license, installation) Then
     Throw New Exception(app.Message)
 End If
+Console.WriteLine($"Status: {app.Status}")
+Console.WriteLine($"Features: {app.Features}")
+Console.WriteLine($"License: {app.LicenseId}")
+Console.WriteLine($"Check expires: {app.ExpiresAt}")
 ```
 
-A patched program can still skip the check. These examples do not add anti-debug or anti-VM code.
+A good check prints the status, the feature flags stored on the license, the license id, and when this check expires. Type the license key at the prompt. `KERN_LICENSE_KEY` skips the prompt. The program saves an installation id in `kernauth-install` and reuses it. `KERN_INSTALLATION_ID` overrides that file.
+
+## Run
+
+```
+dotnet run -- --test-vectors
+dotnet run
+```
+
+A modified program can still skip the check.
 
 Documentation: https://kernauth.apidog.io
