@@ -19,11 +19,22 @@ Module Program
             Return
         End If
         Dim app = New KernAuth(Api, AppId, PublicKey)
-        If Not app.Validate(LicenseKey(), InstallationId()).GetAwaiter().GetResult() Then Throw New Exception(app.Message)
+        Dim key = LicenseKey()
+        Dim hwid = InstallationId()
+        If Not app.Validate(key, hwid).GetAwaiter().GetResult() Then Throw New Exception(app.Message)
         Console.WriteLine($"Status: {app.Status}")
         Console.WriteLine($"Features: {app.Features}")
         Console.WriteLine($"License: {app.LicenseId}")
         Console.WriteLine($"Check expires: {app.ExpiresAt}")
+        While True
+            Threading.Thread.Sleep(60000)
+            Try
+                app.Heartbeat(key, hwid).GetAwaiter().GetResult()
+            Catch ex As Exception
+                Console.WriteLine(ex.Message)
+                Environment.Exit(1)
+            End Try
+        End While
     End Sub
 
     Function LicenseKey() As String
@@ -139,6 +150,42 @@ Public Class KernAuth
         Return CallMode("validate", license, installation, "License is active")
     End Function
 
+    Public Async Function Heartbeat(license As String, installation As String) As Task
+        Dim nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()
+        Dim fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"kernauth-device-v1:{installation}"))).ToLowerInvariant()
+        Dim body = JsonSerializer.Serialize(New With {
+            .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
+            .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = installation, .nonce = nonce
+        })
+        Using client As New HttpClient()
+            client.Timeout = TimeSpan.FromSeconds(10)
+            Using response = Await client.PostAsync($"{Api}/v1/client/heartbeat", New StringContent(body, Encoding.UTF8, "application/json"))
+                Dim text = Await response.Content.ReadAsStringAsync()
+                If Not response.IsSuccessStatusCode Then Throw New Exception(ApiMessage(text, $"heartbeat failed ({CInt(response.StatusCode)})"))
+                Using parsed = JsonDocument.Parse(text)
+                    Dim ok As JsonElement = Nothing
+                    If Not parsed.RootElement.TryGetProperty("ok", ok) OrElse ok.ValueKind <> JsonValueKind.True Then
+                        Throw New Exception("heartbeat failed")
+                    End If
+                End Using
+            End Using
+        End Using
+    End Function
+
+    Private Shared Function ApiMessage(raw As String, fallback As String) As String
+        Try
+            Using parsed = JsonDocument.Parse(raw)
+                Dim message As JsonElement = Nothing
+                Dim errorNode As JsonElement = Nothing
+                If parsed.RootElement.TryGetProperty("error", errorNode) AndAlso errorNode.TryGetProperty("message", message) AndAlso message.ValueKind = JsonValueKind.String AndAlso Not String.IsNullOrWhiteSpace(message.GetString()) Then
+                    Return message.GetString()
+                End If
+            End Using
+        Catch
+        End Try
+        Return fallback
+    End Function
+
     Private Async Function CallMode(mode As String, license As String, installation As String, okMessage As String) As Task(Of Boolean)
         Try
             Await Post(mode, license, installation)
@@ -162,8 +209,9 @@ Public Class KernAuth
         Using client As New HttpClient()
             client.Timeout = TimeSpan.FromSeconds(10)
             Using response = Await client.PostAsync($"{Api}/v1/client/{mode}", New StringContent(body, Encoding.UTF8, "application/json"))
-                response.EnsureSuccessStatusCode()
-                Using parsed = JsonDocument.Parse(Await response.Content.ReadAsStringAsync())
+                Dim text = Await response.Content.ReadAsStringAsync()
+                If Not response.IsSuccessStatusCode Then Throw New Exception(ApiMessage(text, $"{mode} failed ({CInt(response.StatusCode)})"))
+                Using parsed = JsonDocument.Parse(text)
                     If Not Verify(parsed.RootElement, nonce, AppId, PublicKey, DateTimeOffset.UtcNow) Then
                         Throw New Exception("Invalid or expired signed entitlement")
                     End If
