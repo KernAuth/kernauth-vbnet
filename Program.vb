@@ -11,7 +11,6 @@ Imports Org.BouncyCastle.Crypto.Signers
 Module Program
     Private Const Api As String = "https://api.kernauth.com"
     Private Const AppId As String = "__PUBLIC_APP_ID__"
-    Private Const KeyId As String = "__KEY_ID__"
     Private Const PublicKey As String = "__PUBLIC_KEY__"
 
     Sub Main(args As String())
@@ -19,7 +18,7 @@ Module Program
             Vectors()
             Return
         End If
-        Dim app = New KernAuth(Api, AppId, KeyId, PublicKey)
+        Dim app = New KernAuth(Api, AppId, PublicKey)
         If Not app.Validate(LicenseKey(), InstallationId()).GetAwaiter().GetResult() Then Throw New Exception(app.Message)
         Console.WriteLine($"Status: {app.Status}")
         Console.WriteLine($"Features: {app.Features}")
@@ -85,28 +84,26 @@ Module Program
                 }))
                     Dim nonce = ent.GetProperty("nonce").GetString()
                     Dim name = ent.GetProperty("application_id").GetString()
-                    Dim key = ent.GetProperty("key_id").GetString()
                     Dim pinned = vector.GetProperty("public_key").GetString()
                     Dim now = DateTimeOffset.Parse("2026-01-01T00:01:00Z")
-                    If Not KernAuth.Verify(grant.RootElement, nonce, name, key, pinned, now) OrElse
-                        KernAuth.Verify(grant.RootElement, "wrong", name, key, pinned, now) OrElse
-                        KernAuth.Verify(grant.RootElement, nonce, "pub_other_app", key, pinned, now) OrElse
-                        KernAuth.Verify(grant.RootElement, nonce, name, "wrong-key", pinned, now) OrElse
-                        KernAuth.Verify(grant.RootElement, nonce, name, key, pinned, DateTimeOffset.Parse(ent.GetProperty("expires_at").GetString())) Then
+                    If Not KernAuth.Verify(grant.RootElement, nonce, name, pinned, now) OrElse
+                        KernAuth.Verify(grant.RootElement, "wrong", name, pinned, now) OrElse
+                        KernAuth.Verify(grant.RootElement, nonce, "pub_other_app", pinned, now) OrElse
+                        KernAuth.Verify(grant.RootElement, nonce, name, pinned, DateTimeOffset.Parse(ent.GetProperty("expires_at").GetString())) Then
                         Throw New Exception("Vector verification failed")
                     End If
                 End Using
                 Using forged = JsonDocument.Parse(JsonSerializer.Serialize(New With {
                     .entitlement = ent, .signature = vector.GetProperty("signature").GetString() & "AA"
                 }))
-                    If KernAuth.Verify(forged.RootElement, ent.GetProperty("nonce").GetString(), ent.GetProperty("application_id").GetString(), ent.GetProperty("key_id").GetString(), vector.GetProperty("public_key").GetString(), DateTimeOffset.Parse("2026-01-01T00:01:00Z")) Then
+                    If KernAuth.Verify(forged.RootElement, ent.GetProperty("nonce").GetString(), ent.GetProperty("application_id").GetString(), vector.GetProperty("public_key").GetString(), DateTimeOffset.Parse("2026-01-01T00:01:00Z")) Then
                         Throw New Exception("Bad signature accepted")
                     End If
                 End Using
                 Dim tampered = ent.GetRawText().Replace("""device_id"": ""dev_vector_0001""", """device_id"": ""other""", StringComparison.Ordinal)
                 If tampered = ent.GetRawText() Then Throw New Exception("Device field was not replaced")
                 Using badDevice = JsonDocument.Parse("{""entitlement"":" & tampered & ",""signature"":""" & vector.GetProperty("signature").GetString() & """}")
-                    If KernAuth.Verify(badDevice.RootElement, ent.GetProperty("nonce").GetString(), ent.GetProperty("application_id").GetString(), ent.GetProperty("key_id").GetString(), vector.GetProperty("public_key").GetString(), DateTimeOffset.Parse("2026-01-01T00:01:00Z")) Then
+                    If KernAuth.Verify(badDevice.RootElement, ent.GetProperty("nonce").GetString(), ent.GetProperty("application_id").GetString(), vector.GetProperty("public_key").GetString(), DateTimeOffset.Parse("2026-01-01T00:01:00Z")) Then
                         Throw New Exception("Tampered device accepted")
                     End If
                 End Using
@@ -124,7 +121,6 @@ Public Class KernAuth
 
     Public ReadOnly Property Api As String
     Public ReadOnly Property AppId As String
-    Public ReadOnly Property KeyId As String
     Public ReadOnly Property PublicKey As String
     Public Property Success As Boolean
     Public Property Message As String = ""
@@ -133,10 +129,9 @@ Public Class KernAuth
     Public Property LicenseId As String = ""
     Public Property ExpiresAt As String = ""
 
-    Public Sub New(api As String, appId As String, keyId As String, publicKey As String)
+    Public Sub New(api As String, appId As String, publicKey As String)
         Me.Api = api
         Me.AppId = appId
-        Me.KeyId = keyId
         Me.PublicKey = publicKey
     End Sub
 
@@ -169,7 +164,7 @@ Public Class KernAuth
             Using response = Await client.PostAsync($"{Api}/v1/client/{mode}", New StringContent(body, Encoding.UTF8, "application/json"))
                 response.EnsureSuccessStatusCode()
                 Using parsed = JsonDocument.Parse(Await response.Content.ReadAsStringAsync())
-                    If Not Verify(parsed.RootElement, nonce, AppId, KeyId, PublicKey, DateTimeOffset.UtcNow) Then
+                    If Not Verify(parsed.RootElement, nonce, AppId, PublicKey, DateTimeOffset.UtcNow) Then
                         Throw New Exception("Invalid or expired signed entitlement")
                     End If
                     Dim ent = parsed.RootElement.GetProperty("entitlement")
@@ -222,13 +217,12 @@ Public Class KernAuth
         End If
     End Sub
 
-    Public Shared Function Verify(grant As JsonElement, nonce As String, expectedApp As String, expectedKey As String, pinnedKey As String, now As DateTimeOffset) As Boolean
+    Public Shared Function Verify(grant As JsonElement, nonce As String, expectedApp As String, pinnedKey As String, now As DateTimeOffset) As Boolean
         Try
             Dim ent = grant.GetProperty("entitlement")
             If ent.GetProperty("protocol_version").GetInt32() <> 1 OrElse
                 ent.GetProperty("nonce").GetString() <> nonce OrElse
                 ent.GetProperty("application_id").GetString() <> expectedApp OrElse
-                ent.GetProperty("key_id").GetString() <> expectedKey OrElse
                 ent.GetProperty("status").GetString() <> "active" OrElse
                 DateTimeOffset.Parse(ent.GetProperty("expires_at").GetString()) <= now Then Return False
             Dim key = New Ed25519PublicKeyParameters(Convert.FromBase64String(pinnedKey), 0)
