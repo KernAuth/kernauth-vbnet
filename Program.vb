@@ -39,14 +39,39 @@ Module Program
     Function InstallationId() As String
         Dim fromEnv = Environment.GetEnvironmentVariable("KERN_INSTALLATION_ID")
         If Not String.IsNullOrWhiteSpace(fromEnv) Then Return fromEnv.Trim()
-        Const installFile As String = "kernauth-install"
-        If File.Exists(installFile) Then
-            Dim saved = File.ReadAllText(installFile).Trim()
-            If saved.Length > 0 Then Return saved
+        Dim hwid = MachineHwid().Trim()
+        If AcceptableHwid(hwid) Then Return hwid
+        Throw New Exception("Could not read the HWID")
+    End Function
+
+    Function AcceptableHwid(value As String) As Boolean
+        If value.Length < 8 OrElse value.Length > 64 Then Return False
+        For Each cell In value
+            Dim ok = (cell >= "A"c AndAlso cell <= "Z"c) OrElse (cell >= "a"c AndAlso cell <= "z"c) OrElse (cell >= "0"c AndAlso cell <= "9"c) OrElse cell = "_"c OrElse cell = "-"c
+            If Not ok Then Return False
+        Next
+        Return True
+    End Function
+
+    Function MachineHwid() As String
+        If OperatingSystem.IsWindows() Then
+            Dim user = System.Security.Principal.WindowsIdentity.GetCurrent().User
+            If user Is Nothing Then Return ""
+            Return user.Value
         End If
-        Dim created = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant()
-        File.WriteAllText(installFile, created & vbLf)
-        Return created
+        If OperatingSystem.IsLinux() Then Return File.ReadAllText("/etc/machine-id")
+        If Not OperatingSystem.IsMacOS() Then Return ""
+        Dim process = System.Diagnostics.Process.Start(New System.Diagnostics.ProcessStartInfo With {
+            .FileName = "ioreg", .Arguments = "-rd1 -c IOPlatformExpertDevice", .RedirectStandardOutput = True, .UseShellExecute = False
+        })
+        Dim output = If(process?.StandardOutput.ReadToEnd(), "")
+        Dim marker = """IOPlatformUUID"" = """
+        Dim start = output.IndexOf(marker, StringComparison.Ordinal)
+        If start < 0 Then Return ""
+        start += marker.Length
+        Dim ending = output.IndexOf(""""c, start)
+        If ending < 0 Then Return ""
+        Return output.Substring(start, ending - start)
     End Function
 
     Sub Vectors()
