@@ -157,7 +157,7 @@ Public Class KernAuth
         Dim fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"kernauth-device-v1:{bound}"))).ToLowerInvariant()
         Dim body = JsonSerializer.Serialize(New With {
             .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
-            .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound, .nonce = nonce
+            .save_hwid = True, .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound, .nonce = nonce
         })
         Using client As New HttpClient()
             client.Timeout = TimeSpan.FromSeconds(10)

@@ -1,5 +1,6 @@
 Imports System
 Imports System.Linq
+Imports System.Text.Json
 
 Module Program
     Sub Main(args As String())
@@ -13,10 +14,21 @@ Module Program
             Console.WriteLine(app.Message)
             Environment.Exit(1)
         End If
-        Console.WriteLine($"Status: {app.Status}")
-        Console.WriteLine($"Features: {app.Features}")
-        Console.WriteLine($"License: {app.LicenseId}")
-        Console.WriteLine($"Check expires: {app.ExpiresAt}")
+        Using features = JsonDocument.Parse(app.Features)
+            Dim payloadKey As JsonElement = Nothing
+            If Not features.RootElement.TryGetProperty("payload_key", payloadKey) _
+                OrElse payloadKey.ValueKind <> JsonValueKind.String _
+                OrElse String.IsNullOrEmpty(payloadKey.GetString()) Then
+                Console.WriteLine("Payload key is missing")
+                Environment.Exit(1)
+            End If
+            ' Decrypt the program with this key. Drop it when the heartbeat fails.
+            Console.WriteLine($"Status: {app.Status}")
+            Console.WriteLine($"Features: {app.Features}")
+            Console.WriteLine($"Payload key: {payloadKey.GetString()}")
+            Console.WriteLine($"License: {app.LicenseId}")
+            Console.WriteLine($"Check expires: {app.ExpiresAt}")
+        End Using
         While True
             Threading.Thread.Sleep(60000)
             Try
