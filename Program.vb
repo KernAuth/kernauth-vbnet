@@ -8,6 +8,10 @@ Module Program
             Return
         End If
         Dim app = New KernAuth("https://api.kernauth.com", "__PUBLIC_APP_ID__", "__PUBLIC_KEY__")
+        If Not app.Initialize().GetAwaiter().GetResult() Then
+            Console.WriteLine(app.Message)
+            Environment.Exit(1)
+        End If
         Dim key = LicenseKey()
         If Not app.Validate(key).GetAwaiter().GetResult() Then
             Console.WriteLine(app.Message)

@@ -24,12 +24,27 @@ Public Class KernAuth
     Public Property LicenseId As String = ""
     Public Property ExpiresAt As String = ""
     Private installation As String = Nothing
+    Private sessionSalt As String = Nothing
+    Private timeBucket As String = Nothing
 
     Public Sub New(api As String, appId As String, publicKey As String)
         Me.Api = api
         Me.AppId = appId
         Me.PublicKey = publicKey
     End Sub
+
+    Public Async Function Initialize() As Task(Of Boolean)
+        Try
+            Await PostInitialize()
+            Success = True
+            Message = "Session ready"
+            Return True
+        Catch ex As Exception
+            Success = False
+            Message = ex.Message
+            Return False
+        End Try
+    End Function
 
     Public Function Validate(license As String) As Task(Of Boolean)
         Return CallMode("validate", license, "License is active")
@@ -151,14 +166,57 @@ Public Class KernAuth
         End Try
     End Function
 
-    Private Async Function Post(mode As String, license As String) As Task
+    Private Async Function PostInitialize() As Task
         Dim bound = Installation()
+        sessionSalt = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()
+        timeBucket = Nothing
         Dim nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()
         Dim fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"kernauth-device-v1:{bound}"))).ToLowerInvariant()
         Dim body = JsonSerializer.Serialize(New With {
-            .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
-            .save_hwid = True, .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound, .nonce = nonce
+            .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0",
+            .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound,
+            .session_salt = sessionSalt, .nonce = nonce
         })
+        Using client As New HttpClient()
+            client.Timeout = TimeSpan.FromSeconds(10)
+            Using response = Await client.PostAsync($"{Api}/v1/client/initialize", New StringContent(body, Encoding.UTF8, "application/json"))
+                Dim text = Await response.Content.ReadAsStringAsync()
+                If Not response.IsSuccessStatusCode Then Throw New Exception(ApiMessage(text, $"initialize failed ({CInt(response.StatusCode)})"))
+                Using parsed = JsonDocument.Parse(text)
+                    Dim ok As JsonElement = Nothing
+                    Dim bucket As JsonElement = Nothing
+                    If Not parsed.RootElement.TryGetProperty("ok", ok) OrElse ok.ValueKind <> JsonValueKind.True OrElse
+                        Not parsed.RootElement.TryGetProperty("time_bucket", bucket) OrElse
+                        bucket.ValueKind <> JsonValueKind.String OrElse
+                        String.IsNullOrWhiteSpace(bucket.GetString()) Then
+                        Throw New Exception("Initialize response was incomplete")
+                    End If
+                    timeBucket = bucket.GetString()
+                End Using
+            End Using
+        End Using
+    End Function
+
+    Private Async Function Post(mode As String, license As String) As Task
+        If mode = "validate" AndAlso (sessionSalt Is Nothing OrElse timeBucket Is Nothing) Then
+            Throw New Exception("Call Initialize first")
+        End If
+        Dim bound = Installation()
+        Dim nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()
+        Dim fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"kernauth-device-v1:{bound}"))).ToLowerInvariant()
+        Dim body As String
+        If mode = "validate" Then
+            body = JsonSerializer.Serialize(New With {
+                .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
+                .save_hwid = True, .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound,
+                .session_salt = sessionSalt, .time_bucket = timeBucket, .nonce = nonce
+            })
+        Else
+            body = JsonSerializer.Serialize(New With {
+                .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
+                .save_hwid = True, .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound, .nonce = nonce
+            })
+        End If
         Using client As New HttpClient()
             client.Timeout = TimeSpan.FromSeconds(10)
             Using response = Await client.PostAsync($"{Api}/v1/client/{mode}", New StringContent(body, Encoding.UTF8, "application/json"))
