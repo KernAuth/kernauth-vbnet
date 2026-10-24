@@ -23,14 +23,16 @@ Public Class KernAuth
     Public Property Features As String = ""
     Public Property LicenseId As String = ""
     Public Property ExpiresAt As String = ""
+    Public ReadOnly Property Version As String
     Private installation As String = Nothing
     Private sessionSalt As String = Nothing
     Private timeBucket As String = Nothing
 
-    Public Sub New(api As String, appId As String, publicKey As String)
+    Public Sub New(api As String, appId As String, publicKey As String, Optional version As String = "")
         Me.Api = api
         Me.AppId = appId
         Me.PublicKey = publicKey
+        Me.Version = If(String.IsNullOrWhiteSpace(version), "1.0.0", version)
     End Sub
 
     Public Async Function Initialize() As Task(Of Boolean)
@@ -55,7 +57,7 @@ Public Class KernAuth
         Dim nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()
         Dim fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"kernauth-device-v1:{bound}"))).ToLowerInvariant()
         Dim body = JsonSerializer.Serialize(New With {
-            .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
+            .protocol_version = 1, .public_app_id = AppId, .client_version = Version, .license_key = license,
             .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound, .nonce = nonce
         })
         Using client As New HttpClient()
@@ -173,7 +175,7 @@ Public Class KernAuth
         Dim nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant()
         Dim fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"kernauth-device-v1:{bound}"))).ToLowerInvariant()
         Dim body = JsonSerializer.Serialize(New With {
-            .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0",
+            .protocol_version = 1, .public_app_id = AppId, .client_version = Version,
             .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound,
             .session_salt = sessionSalt, .nonce = nonce
         })
@@ -207,13 +209,13 @@ Public Class KernAuth
         Dim body As String
         If mode = "validate" Then
             body = JsonSerializer.Serialize(New With {
-                .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
+                .protocol_version = 1, .public_app_id = AppId, .client_version = Version, .license_key = license,
                 .save_hwid = True, .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound,
                 .session_salt = sessionSalt, .time_bucket = timeBucket, .nonce = nonce
             })
         Else
             body = JsonSerializer.Serialize(New With {
-                .protocol_version = 1, .public_app_id = AppId, .client_version = "1.0.0", .license_key = license,
+                .protocol_version = 1, .public_app_id = AppId, .client_version = Version, .license_key = license,
                 .save_hwid = True, .fingerprint_version = 1, .device_fingerprint = fingerprint, .installation_id = bound, .nonce = nonce
             })
         End If
